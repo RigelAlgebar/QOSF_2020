@@ -13,498 +13,204 @@ from qiskit import BasicAer
 from tqdm import trange
 
 
-
-################################################################################
-################################################################################
-################################################################################
-
-
-
 # Define the backend
 backend = BasicAer.get_backend('statevector_simulator')
-
 
 # Here we set the seed for the random number generator (for reproducibility)
 np.random.seed(101)
 
-
-# This is the random "PHI" state we optimize against with 
-phi = 2*pi*np.random.random(16) + 2*pi*np.random.random(16) * 1j
-phi = phi/np.linalg.norm(phi)
-
+# This is the random "PHI" state we optimize against with
+phi = 2 * pi * np.random.random(16) + 2 * pi * np.random.random(16) * 1j
+phi = phi / np.linalg.norm(phi)
 
 
-################################################################################
-################################################################################
-################################################################################
+_ROTATION_GATES = {
+    "x": QuantumCircuit.rx,
+    "y": QuantumCircuit.ry,
+    "z": QuantumCircuit.rz,
+}
 
+_CONTROLLED_GATES = {
+    "x": QuantumCircuit.cx,
+    "y": QuantumCircuit.cy,
+    "z": QuantumCircuit.cz,
+}
+
+_PAIR_INDICES = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+
+
+def _split_angle_vector(angles):
+    """Split a flat angle vector into odd/even blocks and infer layer count."""
+    odd_angles = [angles[i:i + 4] for i in range(0, len(angles), 8)]
+    even_angles = [angles[i:i + 4] for i in range(4, len(angles), 8)]
+    layers = len(angles) // 8
+    return odd_angles, even_angles, layers
+
+
+def _flatten_angles(layer, odd_block_angles, even_block_angles):
+    """Pack odd/even angles into the vector format expected by scipy.minimize."""
+    return np.hstack([odd_block_angles[:layer + 1], even_block_angles[:layer + 1]]).flatten()
+
+
+def _reshape_optimized_angles(opt_vector):
+    """Restore minimize output into [layers][4 angles] for odd/even blocks."""
+    new_odd_angles = [opt_vector[i:i + 4] for i in range(0, len(opt_vector), 8)]
+    new_even_angles = [opt_vector[i:i + 4] for i in range(4, len(opt_vector), 8)]
+    return [new_odd_angles, new_even_angles]
+
+
+def _run_objective(angles, case_num):
+    q_trial = QuantumRegister(4)
+    qc_trial = QuantumCircuit(q_trial)
+
+    odd_angles, even_angles, layers = _split_angle_vector(angles)
+    sim = simulation(q_trial, qc_trial, layers, odd_angles, even_angles, case_num)
+    trial_circuit = sim.build_case(case_num)
+    state_trial = execute(trial_circuit, backend).result().get_statevector()
+    return np.linalg.norm(state_trial - phi)
+
+
+def _optimize_case(layer, odd_block_angles, even_block_angles, case_num):
+    angles = _flatten_angles(layer, odd_block_angles, even_block_angles)
+    bounds = tuple((0, 2.0 * pi) for _ in range(len(angles)))
+    result = minimize(
+        lambda x: _run_objective(x, case_num),
+        angles,
+        method='L-BFGS-B',
+        bounds=bounds,
+    )
+    return _reshape_optimized_angles(result.x)
 
 
 class oddBlock:
-    
-    '''
-    The oddBlock object adds a series of four rotation gates all of them in
-    the same axis.
+    """Adds a series of four single-qubit rotations on the selected axis."""
 
-    Args:
-    	q (Quantum Register): Specify the register on which we act upon.
-    	qc (Quantum Circuit): Specifu the circuit were the gates are added.
-        vector_angles: 1-D Vector containing all of the angles for the gates.
-
-    Methods:
-    	Each method specifies the axis for the rotation gates and returns the
-    	input circuit modified in place. 
-    '''
+    @staticmethod
+    def _add_block(axis, q, qc, vector_angles):
+        rot_gate = _ROTATION_GATES[axis]
+        for qubit, angle in enumerate(vector_angles):
+            rot_gate(qc, angle, q[qubit])
+        return qc
 
     @staticmethod
     def addBlock_xaxis(q, qc, vector_angles):
-        angles = vector_angles
-        qc.rx(angles[0], q[0])
-        qc.rx(angles[1], q[1])
-        qc.rx(angles[2], q[2])
-        qc.rx(angles[3], q[3])
-        return qc
-    
-    
+        return oddBlock._add_block("x", q, qc, vector_angles)
+
     @staticmethod
     def addBlock_yaxis(q, qc, vector_angles):
-        angles = vector_angles
-        qc.ry(angles[0], q[0])
-        qc.ry(angles[1], q[1])
-        qc.ry(angles[2], q[2])
-        qc.ry(angles[3], q[3])
-        return qc
-    
-    
+        return oddBlock._add_block("y", q, qc, vector_angles)
+
     @staticmethod
     def addBlock_zaxis(q, qc, vector_angles):
-        angles = vector_angles
-        qc.rz(angles[0], q[0])
-        qc.rz(angles[1], q[1])
-        qc.rz(angles[2], q[2])
-        qc.rz(angles[3], q[3])
-        return qc
-
-
-
-################################################################################
-################################################################################
-################################################################################
-
+        return oddBlock._add_block("z", q, qc, vector_angles)
 
 
 class evenBlock:
-    
-    '''
-    The evenBlock object adds a series of four rotation gates follow by four
-    control raotation gates, all of them acting on the same axis.
+    """Adds four rotations followed by all pair-wise controlled gates."""
 
-    Args:
-    	q (Quantum Register): Specify the register on which we act upon.
-    	qc (Quantum Circuit): Specify the circuit were the gates are added.
-        vector_angles: 1-D Vector containing all of the angles for the gates.
+    @staticmethod
+    def _add_block(axis, q, qc, vector_angles):
+        rot_gate = _ROTATION_GATES[axis]
+        ctrl_gate = _CONTROLLED_GATES[axis]
 
-    Methods:
-    	Each method specifies the axis for the rotation gates and returns the
-    	input circuit modified in place. 
-    '''
+        for qubit, angle in enumerate(vector_angles):
+            rot_gate(qc, angle, q[qubit])
+
+        for control, target in _PAIR_INDICES:
+            ctrl_gate(qc, q[control], q[target])
+
+        return qc
 
     @staticmethod
     def addBlock_xaxis(q, qc, vector_angles):
-        angles = vector_angles
-        qc.rx(angles[0], q[0])
-        qc.rx(angles[1], q[1])
-        qc.rx(angles[2], q[2])
-        qc.rx(angles[3], q[3])
-        qc.cx(q[0], q[1])
-        qc.cx(q[0], q[2])
-        qc.cx(q[0], q[3])
-        qc.cx(q[1], q[2])
-        qc.cx(q[1], q[3])
-        qc.cx(q[2], q[3])
-        return qc
-    
-    
+        return evenBlock._add_block("x", q, qc, vector_angles)
+
     @staticmethod
     def addBlock_yaxis(q, qc, vector_angles):
-        angles = vector_angles
-        qc.ry(angles[0], q[0])
-        qc.ry(angles[1], q[1])
-        qc.ry(angles[2], q[2])
-        qc.ry(angles[3], q[3])
-        qc.cy(q[0], q[1])
-        qc.cy(q[0], q[2])
-        qc.cy(q[0], q[3])
-        qc.cy(q[1], q[2])
-        qc.cy(q[1], q[3])
-        qc.cy(q[2], q[3])
-        return qc
-        
-    
+        return evenBlock._add_block("y", q, qc, vector_angles)
+
     @staticmethod
     def addBlock_zaxis(q, qc, vector_angles):
-        angles = vector_angles
-        qc.rz(angles[0], q[0])
-        qc.rz(angles[1], q[1])
-        qc.rz(angles[2], q[2])
-        qc.rz(angles[3], q[3])
-        qc.cz(q[0], q[1])
-        qc.cz(q[0], q[2])
-        qc.cz(q[0], q[3])
-        qc.cz(q[1], q[2])
-        qc.cz(q[1], q[3])
-        qc.cz(q[2], q[3])
-        return qc
-
-
-
-################################################################################
-################################################################################
-################################################################################
-    
+        return evenBlock._add_block("z", q, qc, vector_angles)
 
 
 class simulation:
+    """Defines and builds parameterized circuits for all odd/even axis cases."""
 
-	'''
-	The simulation object defines a fully initialize circuit to execute.
+    _CASE_AXES = {
+        1: ("x", "x"), 2: ("x", "y"), 3: ("x", "z"),
+        4: ("y", "x"), 5: ("y", "y"), 6: ("y", "z"),
+        7: ("z", "x"), 8: ("z", "y"), 9: ("z", "z"),
+    }
 
-    Args:
-    	q (Quantum Register): Specify the register on which we act upon.
-    	qc (Quantum Circuit): Specify the circuit were the gates are added.
-        vector_odd_angles: 2-D Vector containing all of the angles for the 
-        odd blocks.
-        vector_even_angles: 2-D Vector containing all of the angles for the 
-        even blocks.
-        !!!
-        caseNum: This parameter is supposed to help us to specify a simulation
-        case; however, when the method "caseToRun" is invoked, the the whole
-        simuation presents an unexpected beheavior. I decided to not to depre_
-        cate this parameter for the moment as it does not interfere with the
-        workflow of the Notebooks. WORK IN PROGRESS.
-		!!!
+    def __init__(self, q, qc, layers, vector_oddAngles, vector_evenAngles, caseNum):
+        self.q = QuantumRegister(4)
+        self.qc = QuantumCircuit(self.q)
+        self.layers = layers
+        self.angles_odd = vector_oddAngles
+        self.angles_even = vector_evenAngles
+        self.caseNum = caseNum
 
-    Methods:
-    	Each method represents a study case, being each case a pair of axis on
-    	each of the blocks. 
-    	The caseToRun method is gibing rise to weird beheavior of the simulation
-    	and hence is currently not supported. This method contains a dictionary
-    	that shoud call the N-build method vigen an N input from the user.
-    '''
+    def _build(self, odd_axis, even_axis):
+        odd_builder = getattr(oddBlock, f"addBlock_{odd_axis}axis")
+        even_builder = getattr(evenBlock, f"addBlock_{even_axis}axis")
 
-	def __init__(self, q, qc, layers, vector_oddAngles, vector_evenAngles, caseNum):
-		self.q = QuantumRegister(4)
-		self.qc = QuantumCircuit(self.q)
-		self.layers = layers
-		self.angles_odd = vector_oddAngles
-		self.angles_even = vector_evenAngles
-		self.caseNum = caseNum
-        
-        
-	def build_case1(self):
-		'''
-		Odd block  axis: X
-		Even block axis: X
-		'''
-		for i in range(self.layers):
-			self.qc = oddBlock.addBlock_xaxis(self.q, self.qc, self.angles_odd[i])
-			self.qc = evenBlock.addBlock_xaxis(self.q, self.qc, self.angles_even[i])
-        
-		return self.qc
-		
+        for layer_idx in range(self.layers):
+            self.qc = odd_builder(self.q, self.qc, self.angles_odd[layer_idx])
+            self.qc = even_builder(self.q, self.qc, self.angles_even[layer_idx])
+        return self.qc
 
-	def build_case2(self):
-		'''
-		Odd block  axis: X
-		Even block axis: Y
-   		'''
-		for i in range(self.layers):
-		    self.qc = oddBlock.addBlock_xaxis(self.q, self.qc, self.angles_odd[i])
-		    self.qc = evenBlock.addBlock_yaxis(self.q, self.qc, self.angles_even[i])
-        
-		return self.qc
-	
-	
-	def build_case3(self):
-		'''
-		Odd block  axis: X
-		Even block axis: Z
-		'''
-		for i in range(self.layers):
-		    self.qc = oddBlock.addBlock_xaxis(self.q, self.qc, self.angles_odd[i])
-		    self.qc = evenBlock.addBlock_zaxis(self.q, self.qc, self.angles_even[i])
-		
-		return self.qc
-    
-    
-	def build_case4(self):
-		'''
-		Odd block  axis: Y
-		Even block axis: X
-		'''
-		for i in range(self.layers):
-			self.qc = oddBlock.addBlock_yaxis(self.q, self.qc, self.angles_odd[i])
-			self.qc = evenBlock.addBlock_xaxis(self.q, self.qc, self.angles_even[i])
+    def build_case(self, case_num):
+        odd_axis, even_axis = self._CASE_AXES[case_num]
+        return self._build(odd_axis, even_axis)
 
-		return self.qc
-    
-    
-	def build_case5(self):
-		'''
-		Odd block  axis: Y
-		Even block axis: Y
-		'''
-		for i in range(self.layers):
-			self.qc = oddBlock.addBlock_yaxis(self.q, self.qc, self.angles_odd[i])
-			self.qc = evenBlock.addBlock_yaxis(self.q, self.qc, self.angles_even[i])
-		
-		return self.qc
-    
-    
-	def build_case6(self):
-		'''
-		Odd block  axis: Y
-		Even block axis: Z
-		'''
-		for i in range(self.layers):
-		    self.qc = oddBlock.addBlock_yaxis(self.q, self.qc, self.angles_odd[i])
-		    self.qc = evenBlock.addBlock_zaxis(self.q, self.qc, self.angles_even[i])
-		
-		return self.qc
-    
-    
-	def build_case7(self):
-		'''
-		Odd block  axis: Z
-		Even block axis: X
-		'''
-		for i in range(self.layers):
-			self.qc = oddBlock.addBlock_zaxis(self.q, self.qc, self.angles_odd[i])
-			self.qc = evenBlock.addBlock_xaxis(self.q, self.qc, self.angles_even[i])
+    def build_case1(self):
+        return self.build_case(1)
 
-		return self.qc
-    
-    
-	def build_case8(self):
-		'''
-		Odd block  axis: Z
-		Even block axis: Y
-		'''
-		for i in range(self.layers):
-			self.qc = oddBlock.addBlock_zaxis(self.q, self.qc, self.angles_odd[i])
-			self.qc = evenBlock.addBlock_yaxis(self.q, self.qc, self.angles_even[i])
-		
-		return self.qc
+    def build_case2(self):
+        return self.build_case(2)
 
-    
-	def build_case9(self):
-		'''
-		Odd block  axis: Z
-		Even block axis: Z
-		'''
-		for i in range(self.layers):
-			self.qc = oddBlock.addBlock_zaxis(self.q, self.qc, self.angles_odd[i])
-			self.qc = evenBlock.addBlock_zaxis(self.q, self.qc, self.angles_even[i])
+    def build_case3(self):
+        return self.build_case(3)
 
-		return self.qc
-    
-    
-	# Gives rise to an unexpected beheavior! Therefore, temporarely out of 
-	# service.
-	'''
-	def caseToRun(self):
-		cases = {1: self.build_case1(), 2: self.build_case2(), 3: self.build_case3(), 
-		4: self.build_case4(), 5: self.build_case5(), 6: self.build_case6(), 
-		7: self.build_case7(), 8: self.build_case8(), 9: self.build_case9()}
+    def build_case4(self):
+        return self.build_case(4)
 
-	return cases[self.caseNum]
-	'''
+    def build_case5(self):
+        return self.build_case(5)
 
+    def build_case6(self):
+        return self.build_case(6)
 
+    def build_case7(self):
+        return self.build_case(7)
 
-################################################################################
-################################################################################
-################################################################################
+    def build_case8(self):
+        return self.build_case(8)
 
+    def build_case9(self):
+        return self.build_case(9)
 
-
-'''
-The following functions are a way around for the automatization of the simulation
-cases. To implement a proper automatization we need to:
-	 i) Fix the "caseToRun" method of the simulation class.
-	ii) Find the right way for the wraping of the arguments of minimize function
-	of scipy. 
-
-I have limited this document to the first three cases for the moment, as it seems
-like the other ones behave qualitatively similar to ones define below. 
-'''
 
 def objective_case1(angles):
-
-    q_trial    = QuantumRegister(4)
-    qc_trial   = QuantumCircuit(q_trial)
-
-
-    # The simulation class receives 2-D vectors of 1-D sub-vectors each with 
-    # the four angles needed for the rotation gates.
-    imp_angles = [[angles[i], angles[i+1], angles[i+2], angles[i+3]] for i in range(0, len(angles)-4, 8)]
-    par_angles = [[angles[i], angles[i+1], angles[i+2], angles[i+3]] for i in range(4, len(angles), 8)]
-    layers     = int(len(angles)/8)
-    
-
-    # Here we define a trial simulation to produce the trial state which we use
-    # to define the function (norm) that we want to minimize.
-    sim_trial   = simulation(q_trial, qc_trial, layers, imp_angles, par_angles, 1).build_case1()
-    state_trial = execute(sim_trial, backend).result().get_statevector()
-    
-    
-    # Return the function to minimize, in this case the norm of the difference
-    # of or trial state an the reference random state phi.
-    return np.linalg.norm(state_trial - phi)
-
+    return _run_objective(angles, 1)
 
 
 def objective_case2(angles):
-
-    q_trial    = QuantumRegister(4)
-    qc_trial   = QuantumCircuit(q_trial)
-
-
-    # The simulation class receives 2-D vectors of 1-D sub-vectors each with 
-    # the four angles needed for the rotation gates.
-    imp_angles = [[angles[i], angles[i+1], angles[i+2], angles[i+3]] for i in range(0, len(angles)-4, 8)]
-    par_angles = [[angles[i], angles[i+1], angles[i+2], angles[i+3]] for i in range(4, len(angles), 8)]
-    layers     = int(len(angles)/8)
-    
-
-    # Here we define a trial simulation to produce the trial state which we use
-    # to define the function (norm) that we want to minimize.
-    sim_trial   = simulation(q_trial, qc_trial, layers, imp_angles, par_angles, 2).build_case2()
-    state_trial = execute(sim_trial, backend).result().get_statevector()
-    
-    
-    # Return the function to minimize, in this case the norm of the difference
-    # of or trial state an the reference random state phi.
-    return np.linalg.norm(state_trial - phi)
-
+    return _run_objective(angles, 2)
 
 
 def objective_case3(angles):
+    return _run_objective(angles, 3)
 
-    q_trial    = QuantumRegister(4)
-    qc_trial   = QuantumCircuit(q_trial)
-
-
-    # The simulation class receives 2-D vectors of 1-D sub-vectors each with 
-    # the four angles needed for the rotation gates.
-    imp_angles = [[angles[i], angles[i+1], angles[i+2], angles[i+3]] for i in range(0, len(angles)-4, 8)]
-    par_angles = [[angles[i], angles[i+1], angles[i+2], angles[i+3]] for i in range(4, len(angles), 8)]
-    layers     = int(len(angles)/8)
-    
-
-    # Here we define a trial simulation to produce the trial state which we use
-    # to define the function (norm) that we want to minimize.
-    sim_trial   = simulation(q_trial, qc_trial, layers, imp_angles, par_angles, 3).build_case3()
-    state_trial = execute(sim_trial, backend).result().get_statevector()
-    
-    
-    # Return the function to minimize, in this case the norm of the difference
-    # of or trial state an the reference random state phi.
-    return np.linalg.norm(state_trial - phi)
-
-
-
-################################################################################
-################################################################################
-################################################################################
-
-
-
-'''
-Same as before, the following functions are a way around for the automatization 
-of the simulation cases.
-'''
 
 def optimization_case1(layer, odd_block_angles, even_block_angles):
-    
-    # The "minimize" function from scipy only accepts 1-D arrays as argument,
-    # so in the following lines e take the odd and even vectors, stack them
-    # together (horizontally) and flatten the resultant array.
-    angles = np.hstack([odd_block_angles[:layer+1], even_block_angles[:layer+1]])
-    angles = angles.flatten()
-    
-
-    # Boundaries (limits) for each variational paramater.
-    bnds   = tuple((0, 2.0*pi) for i in range(len(angles)))
-
-    # Minimize the specific case using the L-BFGS-B' method.
-    result = minimize(objective_case1, angles, method='L-BFGS-B', bounds=bnds)
-    
-
-    # Here we re-order the 1-D array from the minimization result as the new
-    # vectors for the odd and even angles in the right format for the sumulation
-    new_odd_angles  = [[result.x[i], result.x[i+1], result.x[i+2], result.x[i+3]] for i in range(0, len(angles)-4, 8)]
-    new_even_angles = [[result.x[i], result.x[i+1], result.x[i+2], result.x[i+3]] for i in range(4, len(angles), 8)]
-    
-
-    # Return the optimized vectors
-    return [new_odd_angles, new_even_angles]
-
-
+    return _optimize_case(layer, odd_block_angles, even_block_angles, 1)
 
 
 def optimization_case2(layer, odd_block_angles, even_block_angles):
-    
-    # The "minimize" function from scipy only accepts 1-D arrays as argument,
-    # so in the following lines e take the odd and even vectors, stack them
-    # together (horizontally) and flatten the resultant array.
-    angles = np.hstack([odd_block_angles[:layer+1], even_block_angles[:layer+1]])
-    angles = angles.flatten()
-    
-    # Boundaries (limits) for each variational paramater.
-    bnds   = tuple((0, 2.0*pi) for i in range(len(angles)))
-
-    # Minimize the specific case using the L-BFGS-B' method.
-    result = minimize(objective_case2, angles, method='L-BFGS-B', bounds=bnds)
-    
-
-    # Here we re-order the 1-D array from the minimization result as the new
-    # vectors for the odd and even angles in the right format for the sumulation
-    new_odd_angles  = [[result.x[i], result.x[i+1], result.x[i+2], result.x[i+3]] for i in range(0, len(angles)-4, 8)]
-    new_even_angles = [[result.x[i], result.x[i+1], result.x[i+2], result.x[i+3]] for i in range(4, len(angles), 8)]
-    
-
-    # Return the optimized vectors
-    return [new_odd_angles, new_even_angles]
+    return _optimize_case(layer, odd_block_angles, even_block_angles, 2)
 
 
-
-def optimization_case3(layer, odd_block_angles, even_block_angles):#OJO AQUI
-    
-    # The "minimize" function from scipy only accepts 1-D arrays as argument,
-    # so in the following lines e take the odd and even vectors, stack them
-    # together (horizontally) and flatten the resultant array.
-    angles = np.hstack([odd_block_angles[:layer+1], even_block_angles[:layer+1]])
-    angles = angles.flatten()
-    
-    # Minimize the specific case using the L-BFGS-B' method.
-    bnds   = tuple((0, 2.0*pi) for i in range(len(angles)))
-
-    # Minimize the specific case using the L-BFGS-B' method.
-    result = minimize(objective_case3, angles, method='L-BFGS-B', bounds=bnds)
-    
-
-    # Here we re-order the 1-D array from the minimization result as the new
-    # vectors for the odd and even angles in the right format for the sumulation
-    new_odd_angles  = [[result.x[i], result.x[i+1], result.x[i+2], result.x[i+3]] for i in range(0, len(angles)-4, 8)]
-    new_even_angles = [[result.x[i], result.x[i+1], result.x[i+2], result.x[i+3]] for i in range(4, len(angles), 8)]
-    
-
-    # Return the optimized vectors
-    return [new_odd_angles, new_even_angles]
-
-
-
-################################################################################
-################################################################################
-################################################################################
+def optimization_case3(layer, odd_block_angles, even_block_angles):
+    return _optimize_case(layer, odd_block_angles, even_block_angles, 3)
