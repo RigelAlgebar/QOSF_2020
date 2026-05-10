@@ -60,13 +60,13 @@ Try using other gates for the parametrized gates and see what happens.
 
 # Structure of My Code
 
-I have included a <code>utils.py</code> file that contains all of the classes, functions, objects, and imports required for notebooks to run properly. 
+I have included a <code>utils.py</code> file that contains all of the classes, functions, objects, and imports required for Python notebooks to run properly. I have also added a Julia module <code>Task_1/julia_utils.jl</code> plus Julia companion notebooks for Task #1 and the bonus exploration. 
 
 As a user, you are just required to provide the parameters needs to initialize the simulations. For a detailed description of the parameters take a look at the Notebooks.
 
 
 
-For Task #1, I have defined a <code>simulation</code> class that, among other parameters, receives the maximum number of layers that the user wants to include in the simulation. This class prepares the necessary circuits which are later executed. A <code>optimization</code> class has also been define to tune the variational parameters of the circuits. Proper handling and execution of all simulations is already provided within the Notebooks. 👍
+For Task #1, I have defined a <code>simulation</code> class that, among other parameters, receives the maximum number of layers that the user wants to include in the simulation. This class prepares the necessary circuits which are later executed. Optimization helper functions are also provided to tune the variational parameters of the circuits. Proper handling and execution of all simulations is already provided within the Notebooks. 👍
 
 
 
@@ -83,3 +83,16 @@ https://qiskit.org/documentation/install.html
 # Acknowledgments
 
 To the Quantum Open Source Foundation and its fantastic staff for organizing this event! 
+
+## Julia notebooks
+
+The Julia counterparts are available in:
+- `Task_1/Task 1 v.1 Julia.ipynb`
+- `Task_1/Bonus Julia.ipynb`
+
+These notebooks use `Task_1/julia_utils.jl` and are structured to match the same workflow as the Python notebooks with the same objective/optimization workflow implemented via Yao.jl and Optim.jl.
+
+
+## Julia setup
+
+To run the Julia notebooks, install Julia packages: `Yao`, `Optim`, `LinearAlgebra`, and `Random` (last two are standard libraries).
