@@ -90,9 +90,9 @@ The Julia counterparts are available in:
 - `Task_1/Task 1 v.1 Julia.ipynb`
 - `Task_1/Bonus Julia.ipynb`
 
-These notebooks use `Task_1/julia_utils.jl` and are structured to match the same workflow as the Python notebooks with the same objective/optimization workflow implemented via Yao.jl and Optim.jl.
+These notebooks use `Task_1/julia_utils.jl` and follow the same workflow as the Python notebooks. The Julia objective and optimization flow is implemented with Yao.jl and Optim.jl.
 
 
 ## Julia setup
 
-To run the Julia notebooks, install Julia packages: `Yao`, `Optim`, `LinearAlgebra`, and `Random` (last two are standard libraries).
+To run the Julia notebooks, install `Yao` and `Optim`. (`LinearAlgebra` and `Random` are Julia standard libraries.)
