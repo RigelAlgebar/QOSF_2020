@@ -60,7 +60,7 @@ Try using other gates for the parametrized gates and see what happens.
 
 # Structure of My Code
 
-I have included a <code>utils.py</code> file that contains all of the classes, functions, objects, and imports required for Python notebooks to run properly. I have also added a Julia module <code>Task_1/julia_utils.jl</code> plus Julia companion notebooks for Task #1 and the bonus exploration. 
+I have included a <code>utils.py</code> file that contains all of the classes, functions, objects, and imports required for Python notebooks to run properly. I have also added a Julia starter module <code>Task_1/julia_utils.jl</code> plus Julia companion notebooks for Task #1 and the bonus exploration. 
 
 As a user, you are just required to provide the parameters needs to initialize the simulations. For a detailed description of the parameters take a look at the Notebooks.
 
@@ -90,9 +90,4 @@ The Julia counterparts are available in:
 - `Task_1/Task 1 v.1 Julia.ipynb`
 - `Task_1/Bonus Julia.ipynb`
 
-These notebooks use `Task_1/julia_utils.jl` and follow the same workflow as the Python notebooks. The Julia objective and optimization flow is implemented with Yao.jl and Optim.jl.
-
-
-## Julia setup
-
-To run the Julia notebooks, install `Yao` and `Optim`. (`LinearAlgebra` and `Random` are Julia standard libraries.)
+These notebooks use `Task_1/julia_utils.jl` and are structured to match the same workflow as the Python notebooks while the simulator/optimizer integration is completed.
