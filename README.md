@@ -66,7 +66,7 @@ As a user, you are just required to provide the parameters needs to initialize t
 
 
 
-For Task #1, I have defined a <code>simulation</code> class that, among other parameters, receives the maximum number of layers that the user wants to include in the simulation. This class prepares the necessary circuits which are later executed. A <code>optimization</code> class has also been define to tune the variational parameters of the circuits. Proper handling and execution of all simulations is already provided within the Notebooks. 👍
+For Task #1, I have defined a <code>simulation</code> class that, among other parameters, receives the maximum number of layers that the user wants to include in the simulation. This class prepares the necessary circuits which are later executed. Optimization helper functions are also provided to tune the variational parameters of the circuits. Proper handling and execution of all simulations is already provided within the Notebooks. 👍
 
 
 

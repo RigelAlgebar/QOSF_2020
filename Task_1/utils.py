@@ -1,17 +1,15 @@
-# Mathematical imports
-from scipy.optimize import minimize
-import numpy as np
+from dataclasses import dataclass
 from math import pi
 
-# Quiskit imports
-from qiskit import QuantumCircuit, QuantumRegister, execute
-from qiskit.tools.visualization import circuit_drawer
-from qiskit.quantum_info import state_fidelity
-from qiskit import BasicAer
+import numpy as np
+from scipy.optimize import minimize
+from qiskit import QuantumCircuit, QuantumRegister
+from qiskit.quantum_info import Statevector
 
-# Import this to see the progress of the simulations
-from tqdm import trange
 
+@dataclass(frozen=True)
+class SimulationConfig:
+    """Runtime configuration for objective/optimization evaluation."""
 
 # Define the backend
 backend = BasicAer.get_backend('statevector_simulator')
@@ -38,6 +36,9 @@ _CONTROLLED_GATES = {
 
 _PAIR_INDICES = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
 
+def _validate_flat_angles(angles):
+    if len(angles) == 0 or len(angles) % 8 != 0:
+        raise ValueError("`angles` length must be a non-zero multiple of 8.")
 
 def _split_angle_vector(angles):
     """Split a flat angle vector into odd/even blocks and infer layer count."""
@@ -69,6 +70,13 @@ def _run_objective(angles, case_num):
     state_trial = execute(trial_circuit, backend).result().get_statevector()
     return np.linalg.norm(state_trial - phi)
 
+def _run_objective(angles, case_num, config=None):
+    cfg = DEFAULT_CONFIG if config is None else config
+    odd_angles, even_angles, layers = _split_angle_vector(angles)
+    sim = simulation(layers, odd_angles, even_angles, case_num)
+    trial_circuit = sim.build_case(case_num)
+    state_trial = Statevector.from_instruction(trial_circuit).data
+    return np.linalg.norm(state_trial - cfg.phi)
 
 def _optimize_case(layer, odd_block_angles, even_block_angles, case_num):
     angles = _flatten_angles(layer, odd_block_angles, even_block_angles)
@@ -191,6 +199,10 @@ class simulation:
     def build_case9(self):
         return self.build_case(9)
 
+        for layer_idx in range(self.layers):
+            self.qc = odd_builder(self.q, self.qc, self.angles_odd[layer_idx])
+            self.qc = even_builder(self.q, self.qc, self.angles_even[layer_idx])
+        return self.qc
 
 def objective_case1(angles):
     return _run_objective(angles, 1)
